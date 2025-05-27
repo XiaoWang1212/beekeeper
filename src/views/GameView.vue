@@ -3,12 +3,8 @@
     <header>
       <h1>養蜂達人</h1>
       <div class="weather-display">
-        <span id="weather-icon">{{
-          weatherTypes[gameState.weather.current].icon
-        }}</span>
-        <span id="weather-status">{{
-          weatherTypes[gameState.weather.current].name
-        }}</span>
+        <span id="weather-icon">{{ currentWeather.icon }}</span>
+        <span id="weather-status">{{ currentWeather.name }}</span>
       </div>
     </header>
 
@@ -21,7 +17,7 @@
         />
         <div class="resource-info">
           <span class="resource-name">蜜蜂</span>
-          <span>{{ gameState.bees }}</span>
+          <span>{{ bees }}</span>
         </div>
       </div>
       <div class="resource">
@@ -32,14 +28,14 @@
         />
         <div class="resource-info">
           <span class="resource-name">蜂蜜 (kg)</span>
-          <span>{{ gameState.honey.toFixed(1) }}</span>
+          <span>{{ honey.toFixed(1) }}</span>
         </div>
       </div>
       <div class="resource">
         <img src="@/assets/images/coin.png" alt="金錢" class="resource-icon" />
         <div class="resource-info">
           <span class="resource-name">金錢</span>
-          <span>{{ gameState.money }}</span>
+          <span>{{ money }}</span>
         </div>
       </div>
     </div>
@@ -51,20 +47,17 @@
       </div>
       <div class="hive-stats">
         <div>
-          健康度:
-          <span :style="healthColorStyle">{{ gameState.hiveHealth }}%</span>
+          健康度: <span :style="healthColorStyle">{{ hiveHealth }}%</span>
         </div>
         <div>
-          等級: <span>{{ gameState.hiveLevel }}</span>
+          等級: <span>{{ hiveLevel }}</span>
         </div>
         <div>
           產蜜效率:
-          <span
-            >{{ gameState.honeyPerBeePerMinute.toFixed(2) }} kg/分鐘/蜂</span
-          >
+          <span>{{ honeyPerBeePerMinute.toFixed(2) }} kg/分鐘/蜂</span>
         </div>
         <div>
-          蜂箱容量: <span>{{ gameState.hiveCapacity }} 隻</span>
+          蜂箱容量: <span>{{ hiveCapacity }} 隻</span>
         </div>
       </div>
     </div>
@@ -72,47 +65,48 @@
     <div class="action-panel">
       <button
         @click="collectHoney"
-        :disabled="gameState.honey <= 0"
+        :disabled="!canCollectHoney"
         class="game-button"
       >
         採集蜂蜜
       </button>
-      <button
-        @click="buyBee"
-        :disabled="
-          gameState.money < gameState.costs.bee ||
-          gameState.bees >= gameState.hiveCapacity
-        "
-        class="game-button"
-      >
-        購買蜜蜂 (¥{{ gameState.costs.bee }})
+      <button @click="buyBee" :disabled="!canBuyBee" class="game-button">
+        購買蜜蜂 (¥{{ beeCost }})
       </button>
       <button
         @click="upgradeHive"
-        :disabled="gameState.money < gameState.costs.hiveUpgrade"
+        :disabled="!canUpgradeHive"
         class="game-button"
       >
-        升級蜂巢 (¥{{ gameState.costs.hiveUpgrade }})
+        升級蜂巢 (¥{{ hiveUpgradeCost }})
       </button>
       <button @click="checkHive" class="game-button">檢查蜂巢</button>
       <button @click="openForagingModal" class="game-button special">
         採蜜任務
+      </button>
+      <button
+        @click="openHoneyStorage"
+        class="game-button honey-storage-button"
+        :disabled="disableButtons"
+      >
+        <span class="icon">🍯</span>
+        蜂蜜倉庫
+        <span class="badge" v-if="hasNewOrders">!</span>
       </button>
     </div>
 
     <div class="challenges-panel">
       <h2>養蜂挑戰</h2>
       <div
-        :class="['challenge-card', gameState.currentChallenge?.type]"
-        v-if="gameState.currentChallenge"
+        :class="['challenge-card', currentChallenge?.type]"
+        v-if="currentChallenge"
         v-show="!challengeHidden"
       >
-        <h3>{{ gameState.currentChallenge.data.title }}</h3>
-        <p>{{ gameState.currentChallenge.data.description }}</p>
+        <h3>{{ currentChallenge.data.title }}</h3>
+        <p>{{ currentChallenge.data.description }}</p>
         <div class="challenge-actions">
           <button
-            v-for="(solution, index) in gameState.currentChallenge.data
-              .solutions"
+            v-for="(solution, index) in currentChallenge.data.solutions"
             :key="index"
             @click="applySolution(solution)"
             class="challenge-button"
@@ -142,366 +136,109 @@
 
     <!-- 採蜜任務模態框 -->
     <foraging-modal
-      :game-state="gameState"
       :is-active="isForagingModalActive"
       @close-modal="closeForagingModal"
       @start-mission="startForagingMission"
       @sell-all-honey="sellAllHoney"
       @update-selected-area="updateSelectedArea"
-    >
-    </foraging-modal>
+    />
 
     <!-- 勞力任務模態框 -->
     <labor-task-modal
-      v-if="laborTask.isActive"
-      :task="laborTask"
+      v-if="$store.state.laborTasks && $store.state.laborTasks.currentTask"
+      :task="$store.state.laborTasks"
       @complete="completeLaborTask"
-    >
-    </labor-task-modal>
+    />
+
+    <honey-storage-modal
+      :is-active="isHoneyStorageModalActive"
+      @close-modal="closeHoneyStorageModal"
+    />
   </div>
 </template>
 
 <script>
+  import { mapState, mapGetters, mapActions } from "vuex";
   import ForagingModal from "@/components/ForagingModal.vue";
   import LaborTaskModal from "@/components/LaborTaskModal.vue";
+  import HoneyStorageModal from "@/components/HoneyStorageModal.vue";
 
   export default {
-    name: "App",
+    name: "GameView",
     components: {
       ForagingModal,
       LaborTaskModal,
+      HoneyStorageModal,
     },
     data() {
       return {
-        // 遊戲狀態
-        gameState: {
-          // 資源
-          bees: 0,
-          honey: 0,
-          money: 100,
-
-          // 蜂巢屬性
-          hiveLevel: 1,
-          hiveHealth: 100,
-          hiveCapacity: 10,
-          honeyPerBeePerMinute: 0.1, // 每隻蜜蜂每分鐘產蜜量
-
-          // 遊戲內時間計數器
-          gameTime: 0,
-          lastSaveTime: Date.now(),
-
-          // 天氣系統
-          weather: {
-            current: "sunny", // sunny, rainy, drought, cold
-            effectMultiplier: 1.0, // 天氣對產蜜影響的乘數
-            daysRemaining: 0, // 當前天氣持續的天數
-          },
-
-          // 當前挑戰
-          currentChallenge: null,
-
-          // 統計數據
-          totalHoneyCollected: 0,
-          challengesSolved: 0,
-
-          // 升級費用
-          costs: {
-            bee: 50,
-            hiveUpgrade: 200,
-          },
-
-          // 採蜜任務
-          foraging: {
-            activeMissions: [],
-            selectedArea: null,
-            beesAssigned: 1,
-            honeyCollected: {
-              common: 0,
-              wildflower: 0,
-              mountain: 0,
-              rare: 0,
-            },
-          },
-        },
-
-        // 天氣類型及其影響
-        weatherTypes: {
-          sunny: {
-            icon: "☀️",
-            name: "晴天",
-            effect: 1.0,
-            description: "陽光充足，蜜蜂出勤率高",
-          },
-          rainy: {
-            icon: "🌧️",
-            name: "連續大雨",
-            effect: 0.3,
-            description: "雨天，蜜蜂難以飛行採蜜",
-          },
-          drought: {
-            icon: "🏜️",
-            name: "乾旱",
-            effect: 0.5,
-            description: "蜜源植物枯萎，花蜜減少",
-          },
-          cold: {
-            icon: "❄️",
-            name: "寒流來襲",
-            effect: 0.2,
-            description: "蜜蜂活動減緩，需要額外供暖",
-          },
-        },
-
-        // 蜂蜜市場價格波動
-        honeyMarketPrice: 10, // 初始價格：10元/kg
-
-        // 養蜂知識庫
-        beeFacts: [
-          "一隻工蜂一生中只能生產約1茶匙的蜂蜜。",
-          "蜂后一天可以產下多達2000顆蛋，是自己體重兩倍的蛋量。",
-          "工蜂的壽命僅約為6週，但在冬季可以存活數月。",
-          "蜜蜂需要採集約2百萬朵花，才能製造出1公斤的蜂蜜。",
-          "蜜蜂是唯一會產生人類可以食用的昆蟲。",
-          "蜜蜂的飛行速度可達每小時24公里。",
-          "蜂巢內溫度恆定在35°C左右，冬季蜜蜂會聚集成團維持溫度。",
-          "一個健康的蜂群可有50,000到60,000隻蜜蜂。",
-          "蜜蜂透過「搖擺舞」告訴其他蜜蜂食物來源的方向與距離。",
-          "全球約75%的農作物在某種程度上依賴蜜蜂授粉。",
-          "現代養蜂人面臨的最大挑戰之一是「蜂群崩潰失調症」，造成大量蜜蜂神秘消失。",
-          "蜂蜜永遠不會變質，考古學家在古埃及古墓中發現的蜂蜜，數千年後仍可食用。",
-        ],
-        currentBeeFact: "",
-
         // 模態框狀態
         isModalActive: false,
         isForagingModalActive: false,
-
-        // 勞力任務
-        laborTask: {
-          isActive: false,
-          name: "",
-          clicksNeeded: 0,
-          clicksDone: 0,
-          onComplete: null,
-        },
-
-        // 挑戰顯示狀態
-        challengeHidden: false,
-
-        // 病蟲害類型和環境影響類型將在mounted中定義
-        pestTypes: [],
-        environmentalEvents: [],
-
-        // 遊戲循環計時器
-        gameLoopInterval: null,
-        saveGameInterval: null,
+        isHoneyStorageModalActive: false,
       };
     },
     computed: {
-      healthColorStyle() {
-        if (this.gameState.hiveHealth < 30) {
-          return { color: "#e53935" }; // 紅色警告
-        } else if (this.gameState.hiveHealth < 60) {
-          return { color: "#ff9800" }; // 橙色提示
-        } else {
-          return { color: "#4caf50" }; // 綠色正常
-        }
+      ...mapState({
+        bees: (state) => state.bees.bees,
+        honey: (state) => state.honey.total || 0,
+        money: (state) => state.money,
+        hiveLevel: (state) => state.bees.hiveLevel,
+        hiveHealth: (state) => state.bees.hiveHealth,
+        hiveCapacity: (state) => state.bees.hiveCapacity,
+        honeyPerBeePerMinute: (state) => state.bees.honeyPerBeePerMinute,
+        beeCost: (state) => state.bees.costs.bee,
+        hiveUpgradeCost: (state) => state.bees.costs.hiveUpgrade,
+        currentChallenge: (state) => state.challenges.currentChallenge,
+        challengeHidden: (state) => state.challenges.challengeHidden,
+        currentBeeFact: (state) => state.currentBeeFact,
+        laborTask: (state) => state.laborTasks,
+        weatherTypes: (state) => state.weather.weatherTypes,
+      }),
+      ...mapGetters({
+        healthColorStyle: "bees/healthColorStyle",
+        canBuyBee: "bees/canBuyBee",
+        canUpgradeHive: "bees/canUpgradeHive",
+        canCollectHoney: "honey/canCollectHoney",
+        hasNewOrders: "orders/hasNewOrders",
+        currentWeather: "weather/currentWeather",
+      }),
+      disableButtons() {
+        return (
+          this.$store.state.laborTasks &&
+          this.$store.state.laborTasks.currentTask !== null
+        );
       },
     },
     mounted() {
       this.initGame();
-    },
-    beforeUnmount() {
-      // 清除所有計時器
-      clearInterval(this.gameLoopInterval);
-      clearInterval(this.saveGameInterval);
+
+      // 設置蜜蜂渲染的觀察者
+      this.$nextTick(() => {
+        this.renderBees();
+      });
+
+      // 設置 bees 變化時重新渲染蜜蜂
+      this.$watch(
+        () => this.$store.state.bees.bees,
+        () => {
+          this.renderBees();
+        }
+      );
     },
     methods: {
-      initGame() {
-        // 初始化病蟲害類型
-        this.initPestTypes();
-        // 初始化環境影響類型
-        this.initEnvironmentalEvents();
-
-        // 載入已保存的遊戲數據
-        this.loadGame();
-
-        // 設置遊戲循環
-        this.gameLoopInterval = setInterval(this.gameLoop, 1000);
-
-        // 設置自動保存
-        this.saveGameInterval = setInterval(this.saveGame, 30000);
-
-        // 初始化隨機事件
-        setInterval(this.maybeStartChallenge, 120000);
-
-        // 初始化養蜂知識
-        this.currentBeeFact =
-          this.beeFacts[Math.floor(Math.random() * this.beeFacts.length)];
-        setInterval(this.updateBeeFact, 60000);
-
-        // 渲染蜜蜂
-        this.$nextTick(() => {
-          this.renderBees();
-        });
-
-        // 顯示歡迎訊息
-        this.showNotification(
-          "歡迎來到養蜂達人！開始經營你的第一個蜂場吧！",
-          "info"
-        );
-
-        // 為了示範，立即觸發一個簡單的天氣變化
-        setTimeout(() => {
-          this.changeWeather("rainy");
-        }, 10000);
-      },
-
-      // 遊戲循環
-      gameLoop() {
-        // 計算經過的遊戲時間
-        this.gameState.gameTime++;
-
-        // 生產蜂蜜 (每秒執行一次，所以除以60來得到每分鐘的蜂蜜量)
-        let honeyProduction =
-          (this.gameState.bees *
-            this.gameState.honeyPerBeePerMinute *
-            this.gameState.weather.effectMultiplier) /
-          60;
-        this.gameState.honey += honeyProduction;
-        this.gameState.totalHoneyCollected += honeyProduction;
-
-        // 天氣系統更新
-        if (this.gameState.weather.daysRemaining > 0) {
-          this.gameState.weather.daysRemaining--;
-          if (this.gameState.weather.daysRemaining === 0) {
-            this.changeWeather("sunny"); // 默認恢復晴天
-          }
-        }
-
-        // 當蜂群健康度低時，可能會損失蜜蜂
-        if (
-          this.gameState.hiveHealth < 30 &&
-          this.gameState.bees > 0 &&
-          Math.random() < 0.05
-        ) {
-          this.gameState.bees--;
-          this.showNotification("蜂群健康狀況不佳，失去了1隻蜜蜂！", "warning");
-          this.renderBees();
-        }
-      },
-
-      // 採集蜂蜜
-      collectHoney() {
-        if (this.gameState.honey <= 0) return;
-
-        // 採集蜂蜜需要付出勞力 (點擊次數)
-        this.startLaborTask("採集蜂蜜", 5, () => {
-          // 計算蜂蜜價值
-          const honeyValue = Math.round(
-            this.gameState.honey * this.honeyMarketPrice
-          );
-          this.gameState.money += honeyValue;
-
-          this.showNotification(
-            `成功收穫了 ${this.gameState.honey.toFixed(
-              1
-            )}kg 蜂蜜，賣出獲得 ${honeyValue} 元！`,
-            "success"
-          );
-
-          // 每次收穫會更新市場價格
-          this.updateHoneyMarketPrice();
-
-          this.gameState.honey = 0;
-        });
-      },
-
-      // 購買蜜蜂
-      buyBee() {
-        if (
-          this.gameState.money < this.gameState.costs.bee ||
-          this.gameState.bees >= this.gameState.hiveCapacity
-        )
-          return;
-
-        this.gameState.money -= this.gameState.costs.bee;
-        this.gameState.bees += 1;
-
-        this.showNotification("購買了1隻新蜜蜂！", "success");
-        this.renderBees();
-      },
-
-      // 升級蜂巢
-      upgradeHive() {
-        if (this.gameState.money < this.gameState.costs.hiveUpgrade) return;
-
-        this.gameState.money -= this.gameState.costs.hiveUpgrade;
-        this.gameState.hiveLevel += 1;
-        this.gameState.hiveCapacity += 5;
-        this.gameState.honeyPerBeePerMinute += 0.05;
-
-        // 升級後增加成本
-        this.gameState.costs.hiveUpgrade = Math.floor(
-          this.gameState.costs.hiveUpgrade * 1.5
-        );
-
-        this.showNotification(
-          `蜂巢升級到等級 ${this.gameState.hiveLevel}！容量和效率提升了`,
-          "success"
-        );
-      },
-
-      // 檢查蜂巢
-      checkHive() {
-        // 檢查蜂巢需要付出勞力 (更長的點擊時間)
-        this.startLaborTask("檢查蜂巢", 8, () => {
-          // 檢查可以發現問題並略微提升蜂群健康
-          this.gameState.hiveHealth = Math.min(
-            100,
-            this.gameState.hiveHealth + 5
-          );
-
-          // 隨機發現問題
-          if (Math.random() < 0.3 && !this.gameState.currentChallenge) {
-            let problemFound = false;
-
-            if (Math.random() < 0.5) {
-              // 發現病蟲害問題
-              let pest =
-                this.pestTypes[
-                  Math.floor(Math.random() * this.pestTypes.length)
-                ];
-              this.startChallenge("pest", pest);
-              problemFound = true;
-            }
-
-            if (!problemFound) {
-              this.showNotification("檢查完成，蜂巢狀況良好！", "success");
-            }
-          } else {
-            this.showNotification("檢查完成，蜂巢狀況良好！", "success");
-          }
-        });
-      },
-
-      // 開始採蜜任務
-      startForagingMission(missionData) {
-        // 這個方法將由ForagingModal組件調用
-        console.log("Starting foraging mission:", missionData);
-        // 實現任務邏輯...
-      },
-
-      // 出售所有花蜜
-      sellAllHoney() {
-        // 這個方法將由ForagingModal組件調用
-        console.log("Selling all honey");
-        // 實現出售邏輯...
-      },
-
-      updateSelectedArea(areaId) {
-        this.gameState.foraging.selectedArea = areaId;
-      },
+      ...mapActions({
+        initGame: "initGame",
+        collectHoney: "honey/collectHoney",
+        buyBee: "bees/buyBee",
+        upgradeHive: "bees/upgradeHive",
+        checkHive: "bees/checkHive",
+        applySolution: "challenges/applySolution",
+        startForagingMission: "foraging/startForagingMission",
+        sellAllHoney: "honey/sellAllHoney",
+        updateSelectedArea: "foraging/selectArea",
+        completeLaborTask: "laborTasks/progressTask",
+      }),
 
       // 開啟採蜜模態框
       openForagingModal() {
@@ -521,251 +258,8 @@
         if (event.target.id === "modal-overlay") {
           this.isForagingModalActive = false;
           this.isModalActive = false;
+          this.isHoneyStorageModalActive = false;
         }
-      },
-
-      // 開始勞力任務
-      startLaborTask(taskName, clicksNeeded, onComplete) {
-        this.laborTask = {
-          isActive: true,
-          name: taskName,
-          clicksNeeded: clicksNeeded,
-          clicksDone: 0,
-          onComplete: onComplete,
-        };
-      },
-
-      // 完成勞力任務
-      completeLaborTask(clicksDone) {
-        // 更新任務狀態
-        this.laborTask.clicksDone += clicksDone;
-        this.laborTask.isActive = false;
-
-        // 執行任務完成後的邏輯
-        if (this.laborTask.onComplete) {
-          this.laborTask.onComplete();
-        }
-      },
-
-      // 顯示通知
-      showNotification(message, type = "info") {
-        const notificationArea = document.querySelector(".notification-area");
-        const notification = document.createElement("div");
-        notification.className = `notification ${type}`;
-        notification.textContent = message;
-
-        notificationArea.appendChild(notification);
-
-        // 3秒後自動消失
-        setTimeout(() => {
-          notification.style.animation = "slideOut 0.3s forwards";
-          setTimeout(() => {
-            notification.remove();
-          }, 300);
-        }, 3000);
-      },
-
-      // 變更天氣
-      changeWeather(weatherType) {
-        this.gameState.weather.current = weatherType;
-        this.gameState.weather.effectMultiplier =
-          this.weatherTypes[weatherType].effect;
-
-        // 天氣持續3-7天
-        this.gameState.weather.daysRemaining =
-          Math.floor(Math.random() * 5) + 3;
-
-        // 如果天氣不是晴天，則可能觸發天氣挑戰
-        if (weatherType !== "sunny") {
-          this.startWeatherChallenge(weatherType);
-        }
-
-        this.showNotification(
-          `天氣變化：${this.weatherTypes[weatherType].name}！${this.weatherTypes[weatherType].description}`,
-          "info"
-        );
-      },
-
-      // 啟動天氣挑戰
-      startWeatherChallenge(weatherType) {
-        if (this.gameState.currentChallenge) return; // 如果已有挑戰，不再觸發新挑戰
-
-        let challenge = {
-          id: weatherType,
-          title: this.weatherTypes[weatherType].name,
-          description: `${
-            this.weatherTypes[weatherType].description
-          }，蜂蜜產量降低到${this.weatherTypes[weatherType].effect * 100}%！`,
-          solutions: [],
-        };
-
-        switch (weatherType) {
-          case "rainy":
-            challenge.solutions = [
-              {
-                name: "準備糖水餵食 (¥50)",
-                cost: 50,
-                effectText: "蜜蜂獲得額外糖水，保持了活力",
-                effect: () => {
-                  this.gameState.money -= 50;
-                  this.gameState.weather.effectMultiplier += 0.2; // 略微提升效率
-                  return true;
-                },
-              },
-              {
-                name: "等待天氣好轉",
-                cost: 0,
-                effectText: "只能等待雨停...",
-                effect: () => {
-                  return true;
-                },
-              },
-            ];
-            break;
-
-          case "drought":
-            challenge.solutions = [
-              {
-                name: "遷移蜂箱 (¥100)",
-                cost: 100,
-                effectText: "蜂箱遷移到有更多蜜源的地方",
-                effect: () => {
-                  this.gameState.money -= 100;
-                  this.gameState.weather.effectMultiplier += 0.3;
-                  return true;
-                },
-              },
-              {
-                name: "自行種植蜜源植物 (¥70)",
-                cost: 70,
-                effectText: "種植的花朵提供了部分蜜源",
-                effect: () => {
-                  this.gameState.money -= 70;
-                  this.gameState.weather.effectMultiplier += 0.2;
-                  return true;
-                },
-              },
-            ];
-            break;
-
-          case "cold":
-            challenge.solutions = [
-              {
-                name: "加固蜂箱保溫 (¥80)",
-                cost: 80,
-                effectText: "蜂箱保溫效果提升，蜜蜂活動增加",
-                effect: () => {
-                  this.gameState.money -= 80;
-                  this.gameState.weather.effectMultiplier += 0.3;
-                  return true;
-                },
-              },
-              {
-                name: "購買糖漿餵食 (¥60)",
-                cost: 60,
-                effectText: "糖漿提供能量，幫助蜜蜂度過寒冷",
-                effect: () => {
-                  this.gameState.money -= 60;
-                  this.gameState.weather.effectMultiplier += 0.2;
-                  return true;
-                },
-              },
-            ];
-            break;
-        }
-
-        this.startChallenge("weather", challenge);
-      },
-
-      // 隨機可能觸發挑戰
-      maybeStartChallenge() {
-        if (this.gameState.currentChallenge || Math.random() > 0.3) return; // 30%機率觸發
-
-        let challengeTypes = ["pest", "environmental"];
-        let type =
-          challengeTypes[Math.floor(Math.random() * challengeTypes.length)];
-
-        if (type === "pest") {
-          let pest =
-            this.pestTypes[Math.floor(Math.random() * this.pestTypes.length)];
-          this.startChallenge("pest", pest);
-        } else if (type === "environmental") {
-          let envEvent =
-            this.environmentalEvents[
-              Math.floor(Math.random() * this.environmentalEvents.length)
-            ];
-          this.startChallenge("environment", envEvent);
-        }
-      },
-
-      // 啟動挑戰
-      startChallenge(type, challenge) {
-        this.gameState.currentChallenge = {
-          type: type,
-          data: challenge,
-          startTime: Date.now(),
-        };
-
-        this.challengeHidden = false;
-
-        // 顯示通知
-        this.showNotification(`警告：${challenge.title}！`, "warning");
-
-        // 設定計時器，如果沒解決則觸發後果
-        setTimeout(() => {
-          if (
-            this.gameState.currentChallenge &&
-            this.gameState.currentChallenge.type === type &&
-            this.gameState.currentChallenge.data.id === challenge.id
-          ) {
-            // 執行後果
-            if (challenge.consequence) {
-              challenge.consequence();
-            }
-
-            // 移除挑戰
-            this.challengeHidden = true;
-            this.gameState.currentChallenge = null;
-          }
-        }, 120000); // 2分鐘後觸發後果
-      },
-
-      // 應用解決方案
-      applySolution(solution) {
-        // 檢查是否有足夠金錢
-        if (solution.cost > this.gameState.money) {
-          this.showNotification(
-            `金錢不足！需要 ${solution.cost} 元`,
-            "warning"
-          );
-          return;
-        }
-
-        // 執行解決方案
-        let result = solution.effect();
-        if (result) {
-          // 解決方案生效
-          this.showNotification(solution.effectText, "success");
-          this.gameState.challengesSolved++;
-
-          // 移除挑戰
-          this.challengeHidden = true;
-          this.gameState.currentChallenge = null;
-        }
-      },
-
-      // 更新蜂蜜市場價格
-      updateHoneyMarketPrice() {
-        // 隨機波動，但保持在7-13元/kg之間
-        let change = (Math.random() - 0.5) * 3;
-        this.honeyMarketPrice = Math.min(
-          13,
-          Math.max(7, this.honeyMarketPrice + change)
-        );
-        this.showNotification(
-          `蜂蜜市場價格更新：${this.honeyMarketPrice.toFixed(1)}元/kg`,
-          "info"
-        );
       },
 
       // 渲染蜜蜂動畫
@@ -778,14 +272,22 @@
           hiveContainer.removeChild(hiveContainer.firstChild);
         }
 
+        // 獲取容器尺寸，用於計算安全範圍
+        const containerWidth = hiveContainer.clientWidth;
+        const containerHeight = hiveContainer.clientHeight;
+
+        // 安全邊距 (讓蜜蜂不飛出容器)
+        const safeMargin = 30; // 像素
+
         // 添加蜜蜂
-        for (let i = 0; i < this.gameState.bees; i++) {
+        for (let i = 0; i < this.bees; i++) {
           const bee = document.createElement("div");
           bee.className = "bee";
 
-          // 隨機位置
-          let left = Math.random() * 80 + 10; // 10% to 90%
-          let top = Math.random() * 80 + 10; // 10% to 90%
+          // 計算安全的隨機位置 (避開邊緣)
+          // 使用百分比 20% - 80% 確保有足夠邊距
+          let left = Math.random() * 60 + 20; // 20% to 80%
+          let top = Math.random() * 60 + 20; // 20% to 80%
 
           bee.style.left = `${left}%`;
           bee.style.top = `${top}%`;
@@ -793,222 +295,98 @@
           // 隨機飛行動畫延遲，讓蜜蜂不同步移動
           bee.style.animationDelay = `${Math.random() * 5}s`;
 
+          // 計算最大安全飛行距離 (像素)
+          // 根據蜜蜂的初始位置計算安全飛行範圍
+          const posX = (left / 100) * containerWidth; // 轉換為像素
+          const posY = (top / 100) * containerHeight; // 轉換為像素
+
+          // 計算到各邊界的距離
+          const distToLeft = posX;
+          const distToRight = containerWidth - posX;
+          const distToTop = posY;
+          const distToBottom = containerHeight - posY;
+
+          // 安全飛行距離應該是到最近邊界距離的一半，再減去安全邊距
+          const maxSafeDistance =
+            Math.min(distToLeft, distToRight, distToTop, distToBottom) -
+            safeMargin;
+
+          // 確保最小值為 5px (避免負值)
+          const flyDistance = Math.min(Math.max(maxSafeDistance * 0.7, 5), 15);
+
+          // 設置 CSS 變數，定義隨機飛行軌跡
+          // 現在使用較小的範圍，確保不會飛出
+          bee.style.setProperty(
+            "--x0",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty(
+            "--y0",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty("--r0", `${Math.random() * 20 - 10}deg`);
+
+          bee.style.setProperty(
+            "--x25",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty(
+            "--y25",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty("--r25", `${Math.random() * 20 - 10}deg`);
+
+          bee.style.setProperty(
+            "--x50",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty(
+            "--y50",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty("--r50", `${Math.random() * 20 - 10}deg`);
+
+          bee.style.setProperty(
+            "--x75",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty(
+            "--y75",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty("--r75", `${Math.random() * 20 - 10}deg`);
+
+          bee.style.setProperty(
+            "--x100",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty(
+            "--y100",
+            `${Math.random() * flyDistance - flyDistance / 2}px`
+          );
+          bee.style.setProperty("--r100", `${Math.random() * 20 - 10}deg`);
+
+          // 根據蜜蜂位置調整動畫時間 (更靠近中心的蜜蜂飛得慢一些)
+          const centerDistance = Math.sqrt(
+            Math.pow((left - 50) / 50, 2) + Math.pow((top - 50) / 50, 2)
+          );
+          // 3-7秒，中心較慢，邊緣較快
+          const animationDuration = 3 + (1 - centerDistance) * 4;
+          bee.style.animationDuration = `${animationDuration}s`;
+
           hiveContainer.appendChild(bee);
         }
       },
 
-      // 更新養蜂知識
-      updateBeeFact() {
-        this.currentBeeFact =
-          this.beeFacts[Math.floor(Math.random() * this.beeFacts.length)];
+      openHoneyStorage() {
+        this.isHoneyStorageModalActive = true;
+        this.isModalActive = true;
       },
 
-      // 保存遊戲
-      saveGame() {
-        localStorage.setItem("beekeeperGame", JSON.stringify(this.gameState));
-        this.gameState.lastSaveTime = Date.now();
-      },
-
-      // 加載遊戲
-      loadGame() {
-        const savedGame = localStorage.getItem("beekeeperGame");
-        if (savedGame) {
-          try {
-            const parsed = JSON.parse(savedGame);
-            // 只讀取需要的數據，避免版本問題
-            this.gameState.bees = parsed.bees || 0;
-            this.gameState.honey = parsed.honey || 0;
-            this.gameState.money = parsed.money || 100;
-            this.gameState.hiveLevel = parsed.hiveLevel || 1;
-            this.gameState.hiveHealth = parsed.hiveHealth || 100;
-            this.gameState.hiveCapacity = parsed.hiveCapacity || 10;
-            this.gameState.honeyPerBeePerMinute =
-              parsed.honeyPerBeePerMinute || 0.1;
-            this.gameState.totalHoneyCollected =
-              parsed.totalHoneyCollected || 0;
-            this.gameState.challengesSolved = parsed.challengesSolved || 0;
-            this.gameState.costs = parsed.costs || {
-              bee: 50,
-              hiveUpgrade: 200,
-            };
-
-            // 檢測離線時間並計算資源
-            const currentTime = Date.now();
-            const offlineTimeMinutes =
-              (currentTime - (parsed.lastSaveTime || currentTime)) /
-              (1000 * 60);
-
-            if (offlineTimeMinutes > 5) {
-              // 如果離線超過5分鐘
-              // 計算離線時的蜂蜜生產（考慮效率降低）
-              const offlineHoney =
-                this.gameState.bees *
-                this.gameState.honeyPerBeePerMinute *
-                offlineTimeMinutes *
-                0.5; // 效率降為50%
-              this.gameState.honey += offlineHoney;
-
-              // 顯示離線收益
-              setTimeout(() => {
-                this.showNotification(
-                  `你離開了${Math.floor(
-                    offlineTimeMinutes
-                  )}分鐘，蜜蜂在此期間產出了${offlineHoney.toFixed(1)}kg蜂蜜！`,
-                  "success"
-                );
-              }, 1000);
-            }
-          } catch (e) {
-            console.error("Error loading saved game", e);
-            // 如果讀取出錯，使用默認值
-          }
-        }
-      },
-
-      // 初始化病蟲害類型
-      initPestTypes() {
-        this.pestTypes = [
-          {
-            id: "mite",
-            title: "蜂螨爆發",
-            description: "蜂螨正在侵擾你的蜂群，可能導致蜜蜂生病或死亡！",
-            severity: "high",
-            solutions: [
-              {
-                name: "購買藥劑治療",
-                cost: 150,
-                effectText: "蜂群已被治療，健康恢復中",
-                effect: () => {
-                  this.gameState.money -= 150;
-                  this.gameState.hiveHealth = Math.min(
-                    100,
-                    this.gameState.hiveHealth + 30
-                  );
-                  return true;
-                },
-              },
-              {
-                name: "自然療法 (風險更高)",
-                cost: 50,
-                effectText: "自然療法效果有限，蜂群仍有風險",
-                effect: () => {
-                  this.gameState.money -= 50;
-                  let success = Math.random() > 0.4; // 60%成功率
-                  if (success) {
-                    this.gameState.hiveHealth = Math.min(
-                      100,
-                      this.gameState.hiveHealth + 15
-                    );
-                    return true;
-                  } else {
-                    this.gameState.hiveHealth -= 10;
-                    this.showNotification(
-                      "自然療法失敗，蜂群健康度下降！",
-                      "warning"
-                    );
-                    return false;
-                  }
-                },
-              },
-            ],
-            consequence: () => {
-              this.gameState.hiveHealth -= 20;
-              if (this.gameState.bees > 0) this.gameState.bees--;
-              this.showNotification("蜂螨危機惡化！蜜蜂數量減少", "danger");
-              this.renderBees();
-            },
-          },
-          {
-            id: "hornet",
-            title: "胡蜂入侵",
-            description: "一群胡蜂正在攻擊你的蜂巢，蜜蜂恐慌中！",
-            severity: "medium",
-            solutions: [
-              {
-                name: "設置胡蜂陷阱",
-                cost: 100,
-                effectText: "陷阱成功捕獲胡蜂，威脅解除",
-                effect: () => {
-                  this.gameState.money -= 100;
-                  return true;
-                },
-              },
-              {
-                name: "手動驅趕 (需要勞力)",
-                cost: 0,
-                effectText: "經過辛苦驅趕，胡蜂暫時離開了",
-                effect: () => {
-                  // 模擬需要重複點擊才能成功的勞動過程
-                  this.startLaborTask("驅趕胡蜂", 10, () => {
-                    return true;
-                  });
-                  return false; // 返回false因為任務尚未完成
-                },
-              },
-            ],
-            consequence: () => {
-              let lossBees = Math.max(1, Math.floor(this.gameState.bees * 0.2));
-              this.gameState.bees -= lossBees;
-              this.showNotification(
-                `胡蜂攻擊造成${lossBees}隻蜜蜂損失！`,
-                "danger"
-              );
-              this.renderBees();
-            },
-          },
-        ];
-      },
-
-      // 初始化環境影響類型
-      initEnvironmentalEvents() {
-        this.environmentalEvents = [
-          {
-            id: "pesticide",
-            title: "周圍農田噴灑農藥",
-            description: "鄰近農田正大量噴灑農藥，你的蜜蜂可能會中毒！",
-            severity: "high",
-            solutions: [
-              {
-                name: "緊急遷移蜂箱",
-                cost: 200,
-                effectText: "蜂箱已遷移至安全地點，但過程中損失了一些蜂蜜",
-                effect: () => {
-                  this.gameState.money -= 200;
-                  this.gameState.honey *= 0.7; // 損失30%蜂蜜
-                  return true;
-                },
-              },
-              {
-                name: "關閉蜂箱入口 (暫停生產)",
-                cost: 0,
-                effectText: "蜂箱入口已關閉，蜜蜂安全但無法生產",
-                effect: () => {
-                  // 暫停產蜜1分鐘
-                  const originalMultiplier =
-                    this.gameState.weather.effectMultiplier;
-                  this.gameState.weather.effectMultiplier = 0;
-                  this.showNotification("蜂箱入口關閉，產蜜暫停1分鐘", "info");
-                  setTimeout(() => {
-                    this.gameState.weather.effectMultiplier =
-                      originalMultiplier;
-                    this.showNotification("蜂箱入口已重新開啟", "info");
-                  }, 60000);
-                  return true;
-                },
-              },
-            ],
-            consequence: () => {
-              let lossBees = Math.max(2, Math.floor(this.gameState.bees * 0.3));
-              this.gameState.bees -= lossBees;
-              this.gameState.hiveHealth -= 15;
-              this.showNotification(
-                `${lossBees}隻蜜蜂因農藥中毒死亡！蜂群健康受損`,
-                "danger"
-              );
-              this.renderBees();
-            },
-          },
-        ];
+      // 關閉蜂蜜倉庫
+      closeHoneyStorageModal() {
+        this.isHoneyStorageModalActive = false;
+        this.isModalActive = false;
       },
     },
   };
@@ -1129,28 +507,37 @@
   }
 
   .bee {
-    position: absolute;
-    width: 20px;
-    height: 20px;
-    background: url("@/assets/images/bee-sprite.png") no-repeat;
-    animation: fly 5s infinite alternate;
+    position: absolute !important;
+    width: 20px !important;
+    height: 20px !important;
+    background: url("@/assets/images/bee-sprite.png") no-repeat !important;
+    background-size: contain !important;
+    animation: fly 5s infinite alternate !important;
+    z-index: 10;
   }
 
   @keyframes fly {
     0% {
-      transform: translate(0, 0) rotate(10deg);
+      transform: translate(var(--x0, 0), var(--y0, 0)) rotate(var(--r0, 0deg));
     }
-    25% {
-      transform: translate(10px, 15px) rotate(-5deg);
+    20% {
+      transform: translate(var(--x25, 5px), var(--y25, 5px))
+        rotate(var(--r25, 5deg));
     }
-    50% {
-      transform: translate(-5px, 10px) rotate(15deg);
+    40% {
+      transform: translate(var(--x50, -5px), var(--y50, 5px))
+        rotate(var(--r50, -5deg));
     }
-    75% {
-      transform: translate(15px, -10px) rotate(-10deg);
+    60% {
+      transform: translate(var(--x75, 5px), var(--y75, -5px))
+        rotate(var(--r75, 5deg));
+    }
+    80% {
+      transform: translate(var(--x100, -5px), var(--y100, -5px))
+        rotate(var(--r100, -5deg));
     }
     100% {
-      transform: translate(-10px, -15px) rotate(5deg);
+      transform: translate(var(--x0, 0), var(--y0, 0)) rotate(var(--r0, 0deg)); /* 回到起點 */
     }
   }
 
@@ -1329,6 +716,28 @@
     background-color: #e7f5e4;
     border-radius: 10px;
     box-shadow: 0 3px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  .honey-storage-button {
+    background-color: #ffcc00 !important;
+    color: #8b5a00 !important;
+    position: relative;
+  }
+
+  .badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background-color: #e53935;
+    color: white;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: bold;
   }
 
   /* 響應式設計 */
