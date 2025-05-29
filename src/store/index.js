@@ -8,6 +8,8 @@ import foragingModule from "./modules/foraging";
 import challengesModule from "./modules/challenges";
 import weatherModule from "./modules/weather";
 import laborTasksModule from "./modules/laborTasks";
+import tasks from "./modules/tasks";
+import achievements from "./modules/achievements";
 
 // 導入存檔系統
 import persistenceModule from "./helpers/persistence";
@@ -66,11 +68,8 @@ export default createStore({
     },
 
     // 初始化遊戲
-    initGame({ commit, dispatch }) {
-      console.log("初始化遊戲...");
-
-      // 載入遊戲數據
-      dispatch("loadGame");
+    setupGame({ commit, dispatch }) {
+      console.log("設置遊戲邏輯...");
 
       // 設置遊戲循環
       setInterval(() => {
@@ -79,17 +78,20 @@ export default createStore({
 
         // 自動保存遊戲 (每分鐘保存一次)
         if (Date.now() % 60000 < 1000) {
-          dispatch("saveGame");
+          dispatch("persistence/saveGame");
+          dispatch("achievements/checkAchievements");
         }
 
-        // 隨機觸發挑戰 (每5分鐘有機率)
-        if (Date.now() % 300000 < 1000) {
+        // 隨機觸發挑戰 (每3分鐘有機率)
+        if (Date.now() % 180000 < 1000) {
           dispatch("challenges/maybeStartChallenge");
         }
       }, 1000);
 
       // 訂單系統初始化
       dispatch("orders/initOrders");
+      dispatch("tasks/initTasks");
+      dispatch("achievements/initAchievements");
 
       // 更新養蜂知識
       const beeFacts = [
@@ -114,6 +116,14 @@ export default createStore({
       }, 60000);
     },
 
+    // 初始化遊戲 (先載入數據，再設置邏輯)
+    initGame({ dispatch }) {
+      console.log("初始化遊戲...");
+      return dispatch("loadGame").then(() => {
+        dispatch("setupGame");
+      });
+    },
+
     // 保存遊戲 (委派給 persistence 模組)
     saveGame({ dispatch }) {
       dispatch("persistence/saveGame");
@@ -135,6 +145,8 @@ export default createStore({
     weather: weatherModule,
     laborTasks: laborTasksModule,
     persistence: persistenceModule,
+    tasks: tasks,
+    achievements: achievements,
   },
 
   // 插件

@@ -83,22 +83,15 @@ export default {
   },
 
   getters: {
-    canStartMission(state, getters, rootState) {
-      const availableBees = rootState.bees.bees;
+    canStartMission(state, getters, rootState, rootGetters) {
       if (state.selectedArea === null) return false;
 
       const areaData = state.areas[state.selectedArea];
-
-      // 檢查是否有足夠的蜜蜂
-      const beesNeeded = areaData.beeCount;
-
-      // 計算已分配的蜜蜂數量
-      const assignedBees = state.activeMissions.reduce((total, mission) => {
-        return total + state.areas[mission.area].beeCount;
-      }, 0);
+      const minBeesNeeded = areaData.beeCount;
+      const availableBees = rootGetters["bees/availableBees"];
 
       return (
-        availableBees - assignedBees >= beesNeeded &&
+        availableBees >= minBeesNeeded &&
         state.activeMissions.length < state.maxMissions
       );
     },
@@ -193,17 +186,21 @@ export default {
       const area = missionData.area;
       const areaData = state.areas[area];
 
+      const beesToAssign = missionData.bees;
+
       // 根據選擇的時間長度調整基礎持續時間
       let baseDuration = areaData.baseDuration;
-      
-      if (missionData.duration === 'medium') {
+
+      if (missionData.duration === "medium") {
         baseDuration = baseDuration * 2; // 中程任務時間加倍
-      } else if (missionData.duration === 'long') {
+      } else if (missionData.duration === "long") {
         baseDuration = baseDuration * 4; // 長程任務時間四倍
       }
-      
-      console.log(`任務時間計算: 基礎=${areaData.baseDuration}, 選擇=${missionData.duration}, 計算後=${baseDuration}`);
-      
+
+      console.log(
+        `任務時間計算: 基礎=${areaData.baseDuration}, 選擇=${missionData.duration}, 計算後=${baseDuration}`
+      );
+
       // 計算任務持續時間，受天氣影響
       const weatherMultiplier = rootState.weather.effectMultiplier || 1.0;
       const duration = Math.ceil(baseDuration / weatherMultiplier);
@@ -212,7 +209,7 @@ export default {
       const mission = {
         id: Date.now(), // 唯一ID
         area: area,
-        bees: missionData.bees,
+        bees: beesToAssign,
         risk: missionData.risk,
         duration: missionData.duration, // 保存時間類型，而不是秒數
         durationSeconds: duration, // 保存實際秒數
@@ -222,6 +219,8 @@ export default {
       };
 
       commit("START_MISSION", mission);
+
+      commit("bees/ASSIGN_BEES", beesToAssign, { root: true });
 
       let timeDisplay;
       if (duration < 60) {
@@ -254,21 +253,22 @@ export default {
         (m) => m.id === missionId
       );
       if (missionIndex === -1) return;
-    
+
       const mission = state.activeMissions[missionIndex];
       const areaData = state.areas[mission.area];
-    
+      const beesToReturn = mission.bees;
+
       // 計算任務是否成功 (失敗率受天氣影響)
       const roll = Math.random();
       const success = roll > areaData.risk;
-    
+
       // 準備記錄對象 - 使用任務中的蜜蜂數量，而非區域默認值
       const missionRecord = {
         id: mission.id,
         area: mission.area,
         date: Date.now(),
         bees: mission.bees, // 使用任務記錄的蜜蜂數量
-        risk: mission.risk, // 使用任務記錄的風險等級
+        risk: areaData.risk, // 使用任務記錄的風險等級
         success: success,
         rewards: {},
         lostBees: 0,
@@ -302,6 +302,8 @@ export default {
         // 添加獎勵到記錄
         missionRecord.rewards = rewards;
 
+        commit("bees/RETURN_BEES", beesToReturn, { root: true });
+
         // 通知玩家
         let rewardText = Object.entries(rewards)
           .map(
@@ -315,32 +317,105 @@ export default {
         dispatch(
           "showNotification",
           {
-            message: `採蜜成功！從 ${areaData.name} 收穫了 ${rewardText}`,
+            message: `採蜜成功！從 ${areaData.name} 收穫了 ${rewardText}，已存入蜂蜜倉庫`,
             type: "success",
           },
           { root: true }
         );
       } else {
-        // 任務失敗
-        // 隨機損失蜜蜂（0-1隻）
-        const lostBees = Math.random() < 0.3 ? 1 : 0;
+        // 任務失敗 - 減輕懲罰
+
+        // 修改這裡：降低蜜蜂損失機率，根據區域風險調整
+        // 風險越高的區域，損失機率越高，但整體降低
+        const lossChance = Math.min(0.1, areaData.risk / 5); // 最高只有10%機率損失蜜蜂
+
+        // 如果派遣的蜜蜂超過最低需求，進一步降低損失風險
+        const extraBees = Math.max(0, mission.bees - areaData.beeCount);
+        const reducedLossChance =
+          extraBees > 0 ? lossChance * (1 - extraBees * 0.1) : lossChance;
+
+        // 最終損失機率不低於1%
+        const finalLossChance = Math.max(0.01, reducedLossChance);
+
+        // 決定是否損失蜜蜂
+        const lostBees = Math.random() < finalLossChance ? 1 : 0;
+
         missionRecord.lostBees = lostBees;
+
+        // 歸還未損失的蜜蜂
+        const beesToReturn = mission.bees - lostBees;
+        if (beesToReturn > 0) {
+          commit("bees/RETURN_BEES", beesToReturn, { root: true });
+        }
 
         // 如果有損失蜜蜂，更新蜜蜂數量
         if (lostBees > 0) {
           commit("bees/REMOVE_BEES", lostBees, { root: true });
         }
 
-        dispatch(
-          "showNotification",
-          {
-            message: `採蜜失敗！蜜蜂們在 ${areaData.name} 遇到了困難${
-              lostBees > 0 ? `，損失了 ${lostBees} 隻蜜蜂` : ""
-            }`,
-            type: "danger",
-          },
-          { root: true }
-        );
+        // 任務失敗，但仍可能帶回一些蜂蜜 (約成功時的20%)
+        if (Math.random() < 0.5) {
+          // 50%機率帶回一些蜂蜜
+          const rewards = {};
+
+          for (const [type, range] of Object.entries(areaData.reward)) {
+            if (range.max <= 0) continue;
+
+            // 失敗時只能獲得20%的蜂蜜
+            const amount =
+              Math.random() * (range.max - range.min) * 0.2 + range.min * 0.2;
+            if (amount > 0.1) {
+              // 只有超過0.1kg才記錄，避免太小的數量
+              rewards[type] = Number(amount.toFixed(1));
+
+              // 添加到收集記錄
+              commit("ADD_COLLECTED_HONEY", { type, amount: rewards[type] });
+
+              // 添加到蜂蜜庫存
+              commit(
+                "honey/ADD_HONEY_BY_TYPE",
+                { type, amount: rewards[type] },
+                { root: true }
+              );
+            }
+          }
+
+          // 添加獎勵到記錄
+          missionRecord.rewards = rewards;
+
+          // 如果有收集到蜂蜜，在通知中說明
+          const rewardText = Object.entries(rewards)
+            .filter(([, amount]) => amount > 0)
+            .map(
+              ([type, amount]) =>
+                `${amount}kg ${
+                  state.honeyTypes ? state.honeyTypes[type].name : type
+                }`
+            )
+            .join("、");
+
+          dispatch(
+            "showNotification",
+            {
+              message: `採蜜失敗！蜜蜂們在 ${areaData.name} 遇到了困難${
+                lostBees > 0 ? `，損失了 ${lostBees} 隻蜜蜂` : ""
+              }${rewardText ? `，但仍帶回了一些蜂蜜：${rewardText}` : ""}`,
+              type: "warning",
+            },
+            { root: true }
+          );
+        } else {
+          dispatch(
+            "showNotification",
+            {
+              message: `採蜜失敗！蜜蜂們在 ${areaData.name} 遇到了困難${
+                lostBees > 0 ? `，損失了 ${lostBees} 隻蜜蜂` : ""
+              }`,
+              type: "danger",
+            },
+            { root: true }
+          );
+        }
       }
 
       // 添加任務記錄
@@ -348,78 +423,8 @@ export default {
 
       // 移除任務
       commit("COMPLETE_MISSION", missionId);
-    },
 
-    // 升級採蜜能力
-    upgradeForaging({ state, commit, rootState, dispatch }, upgradeType) {
-      const cost = 200; // 升級費用
-
-      if (rootState.money < cost) {
-        dispatch(
-          "showNotification",
-          {
-            message: `金錢不足！升級採蜜需要 ${cost} 元`,
-            type: "warning",
-          },
-          { root: true }
-        );
-        return;
-      }
-
-      commit("REMOVE_MONEY", cost, { root: true });
-
-      if (upgradeType === "capacity") {
-        // 增加同時進行的任務數
-        commit("SET_FORAGING_DATA", {
-          ...state,
-          maxMissions: state.maxMissions + 1,
-        });
-
-        dispatch(
-          "showNotification",
-          {
-            message: `採蜜能力提升！現在可以同時進行 ${state.maxMissions} 個任務`,
-            type: "success",
-          },
-          { root: true }
-        );
-      } else if (upgradeType === "efficiency") {
-        // 提高採蜜效率 (修改區域設置)
-        const updatedAreas = { ...state.areas };
-
-        for (const area in updatedAreas) {
-          for (const honeyType in updatedAreas[area].reward) {
-            updatedAreas[area].reward[honeyType].min *= 1.2;
-            updatedAreas[area].reward[honeyType].max *= 1.2;
-          }
-
-          // 降低風險
-          updatedAreas[area].risk = Math.max(
-            0.01,
-            updatedAreas[area].risk * 0.8
-          );
-
-          // 縮短時間
-          updatedAreas[area].baseDuration = Math.max(
-            15,
-            Math.floor(updatedAreas[area].baseDuration * 0.9)
-          );
-        }
-
-        commit("SET_FORAGING_DATA", {
-          ...state,
-          areas: updatedAreas,
-        });
-
-        dispatch(
-          "showNotification",
-          {
-            message: "採蜜效率提升！獎勵增加，風險降低，時間縮短",
-            type: "success",
-          },
-          { root: true }
-        );
-      }
+      dispatch("achievements/checkAchievements", null, { root: true });
     },
   },
 };

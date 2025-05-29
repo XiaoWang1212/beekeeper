@@ -76,25 +76,25 @@
               <div class="form-group">
                 <label>採集時間：</label>
                 <div class="duration-buttons">
-                  <button 
-                    type="button" 
-                    class="duration-button" 
+                  <button
+                    type="button"
+                    class="duration-button"
                     :class="{ active: missionDuration === 'short' }"
                     @click="missionDuration = 'short'"
                   >
                     短程
                   </button>
-                  <button 
-                    type="button" 
-                    class="duration-button" 
+                  <button
+                    type="button"
+                    class="duration-button"
                     :class="{ active: missionDuration === 'medium' }"
                     @click="missionDuration = 'medium'"
                   >
                     中程
                   </button>
-                  <button 
-                    type="button" 
-                    class="duration-button" 
+                  <button
+                    type="button"
+                    class="duration-button"
                     :class="{ active: missionDuration === 'long' }"
                     @click="missionDuration = 'long'"
                   >
@@ -185,7 +185,7 @@
           </div>
 
           <div class="report-section">
-            <h4>蜂蜜收穫統計</h4>
+            <h4>蜂蜜收穫統計 (已存入倉庫)</h4>
             <div class="honey-stats">
               <div
                 v-for="honey in honeyTypes"
@@ -208,6 +208,9 @@
             <div class="total-honey">
               <div>總收穫量: {{ calculateTotalHoney() }} kg</div>
               <div>總價值: {{ calculateTotalValue() }} 元</div>
+              <div class="storage-status">
+                <span class="status-icon">✓</span> 已存入倉庫
+              </div>
             </div>
           </div>
 
@@ -271,10 +274,6 @@
               </div>
             </div>
           </div>
-
-          <button @click="sellAllHoney" class="game-button">
-            出售所有花蜜
-          </button>
         </div>
       </div>
     </div>
@@ -301,7 +300,7 @@
         tabs: [
           { id: "areas-tab", name: "採蜜區域" },
           { id: "missions-tab", name: "進行中任務" },
-          { id: "report-tab", name: "戰損報告" },
+          { id: "report-tab", name: "採蜜報告" },
         ],
         missionStats: {
           totalMissions: 0,
@@ -385,8 +384,18 @@
         storedMissionHistory: (state) => state.foraging.missionHistory,
       }),
       maxBeesAssignable() {
-        // 最多可指派的蜜蜂數量不能超過玩家擁有的蜜蜂數量
-        return Math.min(5, this.bees);
+        // 考慮可用蜜蜂數量而不是總數
+        const availableBees = this.bees - this.calculateAssignedBees();
+
+        // 確保有足夠蜜蜂滿足所選區域的最低需求
+        if (this.selectedArea) {
+          const area = this.foragingAreas[this.selectedArea];
+          if (area && availableBees < area.beeCount) {
+            return 0; // 不夠滿足最低需求
+          }
+        }
+
+        return Math.min(10, availableBees); // 最多可派遣10隻蜜蜂
       },
       expectedYield() {
         if (!this.selectedArea) return "請選擇區域";
@@ -517,7 +526,6 @@
       ...mapActions({
         updateSelectedArea: "foraging/selectArea",
         startForagingMission: "foraging/startForagingMission",
-        sellAllHoney: "honey/sellAllHoney",
       }),
       selectArea(area) {
         if (area.locked) return;
@@ -645,6 +653,12 @@
         });
 
         return total.toFixed(0);
+      },
+
+      calculateAssignedBees() {
+        return this.activeMissions.reduce((total, mission) => {
+          return total + mission.bees;
+        }, 0);
       },
 
       // 格式化日期
@@ -861,7 +875,7 @@
     gap: 8px;
     margin-top: 5px;
   }
-  
+
   .duration-button {
     flex: 1;
     padding: 8px 0;
@@ -873,12 +887,12 @@
     cursor: pointer;
     transition: all 0.2s;
   }
-  
+
   .duration-button:hover {
     background-color: #f5efe0;
     border-color: #d5c9b0;
   }
-  
+
   .duration-button.active {
     background-color: #ffc226;
     border-color: #ffb300;
@@ -947,6 +961,27 @@
   .honey-amount.zero {
     color: #aaa;
     font-weight: normal;
+  }
+
+  .storage-status {
+    margin-top: 8px;
+    font-size: 0.9rem;
+    color: #4caf50;
+    display: flex;
+    align-items: center;
+  }
+
+  .status-icon {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 18px;
+    height: 18px;
+    background-color: #4caf50;
+    color: white;
+    border-radius: 50%;
+    font-size: 12px;
+    margin-right: 5px;
   }
 
   /* 當螢幕較小時改為單欄顯示 */

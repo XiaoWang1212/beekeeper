@@ -17,7 +17,7 @@
         />
         <div class="resource-info">
           <span class="resource-name">蜜蜂</span>
-          <span>{{ bees }}</span>
+          <span>{{ availableBees }}</span>
         </div>
       </div>
       <div class="resource">
@@ -95,6 +95,26 @@
       </button>
     </div>
 
+    <!-- 在 resources-panel 的下方添加兩個小框框 -->
+    <div class="game-panels">
+      <div class="panel-buttons">
+        <button @click="openTasksPanel" class="panel-button tasks-button">
+          <span class="icon">📋</span>
+          任務
+          <span class="badge" v-if="hasNewTasks">!</span>
+        </button>
+
+        <button
+          @click="openAchievementsPanel"
+          class="panel-button achievements-button"
+        >
+          <span class="icon">🏆</span>
+          成就
+          <span class="badge" v-if="hasNewAchievements">!</span>
+        </button>
+      </div>
+    </div>
+
     <div class="challenges-panel">
       <h2>養蜂挑戰</h2>
       <div
@@ -154,6 +174,16 @@
       :is-active="isHoneyStorageModalActive"
       @close-modal="closeHoneyStorageModal"
     />
+
+    <tasks-modal
+      :is-active="isTasksModalActive"
+      @close-modal="closeTasksModal"
+    />
+
+    <achievements-modal
+      :is-active="isAchievementsModalActive"
+      @close-modal="closeAchievementsModal"
+    />
   </div>
 </template>
 
@@ -162,6 +192,8 @@
   import ForagingModal from "@/components/ForagingModal.vue";
   import LaborTaskModal from "@/components/LaborTaskModal.vue";
   import HoneyStorageModal from "@/components/HoneyStorageModal.vue";
+  import TasksModal from "@/components/TasksModal.vue";
+  import AchievementsModal from "@/components/AchievementsModal.vue";
 
   export default {
     name: "GameView",
@@ -169,6 +201,8 @@
       ForagingModal,
       LaborTaskModal,
       HoneyStorageModal,
+      TasksModal,
+      AchievementsModal,
     },
     data() {
       return {
@@ -176,12 +210,14 @@
         isModalActive: false,
         isForagingModalActive: false,
         isHoneyStorageModalActive: false,
+        isTasksModalActive: false,
+        isAchievementsModalActive: false,
       };
     },
     computed: {
       ...mapState({
         bees: (state) => state.bees.bees,
-        honey: (state) => state.honey.total || 0,
+        honey: (state) => state.honey.production || 0,
         money: (state) => state.money,
         hiveLevel: (state) => state.bees.hiveLevel,
         hiveHealth: (state) => state.bees.hiveHealth,
@@ -202,6 +238,9 @@
         canCollectHoney: "honey/canCollectHoney",
         hasNewOrders: "orders/hasNewOrders",
         currentWeather: "weather/currentWeather",
+        hasNewTasks: "tasks/hasNewTasks",
+        hasNewAchievements: "achievements/hasNewAchievements",
+        availableBees: "bees/availableBees",
       }),
       disableButtons() {
         return (
@@ -211,11 +250,15 @@
       },
     },
     mounted() {
-      this.initGame();
+      // 先加載遊戲數據，再初始化遊戲邏輯
+      this.$store.dispatch("persistence/loadGame").then(() => {
+        // 加載完成後再初始化遊戲
+        this.setupGame();
 
-      // 設置蜜蜂渲染的觀察者
-      this.$nextTick(() => {
-        this.renderBees();
+        // 設置蜜蜂渲染
+        this.$nextTick(() => {
+          this.renderBees();
+        });
       });
 
       // 設置 bees 變化時重新渲染蜜蜂
@@ -225,10 +268,17 @@
           this.renderBees();
         }
       );
+
+      // 添加頁面關閉前的保存
+      window.addEventListener("beforeunload", this.saveGameBeforeUnload);
+    },
+    beforeUnmount() {
+      // 移除事件監聽器
+      window.removeEventListener("beforeunload", this.saveGameBeforeUnload);
     },
     methods: {
       ...mapActions({
-        initGame: "initGame",
+        setupGame: "setupGame",
         collectHoney: "honey/collectHoney",
         buyBee: "bees/buyBee",
         upgradeHive: "bees/upgradeHive",
@@ -259,6 +309,8 @@
           this.isForagingModalActive = false;
           this.isModalActive = false;
           this.isHoneyStorageModalActive = false;
+          this.isTasksModalActive = false;
+          this.isAchievementsModalActive = false;
         }
       },
 
@@ -280,7 +332,7 @@
         const safeMargin = 30; // 像素
 
         // 添加蜜蜂
-        for (let i = 0; i < this.bees; i++) {
+        for (let i = 0; i < this.availableBees; i++) {
           const bee = document.createElement("div");
           bee.className = "bee";
 
@@ -387,6 +439,30 @@
       closeHoneyStorageModal() {
         this.isHoneyStorageModalActive = false;
         this.isModalActive = false;
+      },
+
+      openTasksPanel() {
+        this.isTasksModalActive = true;
+        this.isModalActive = true;
+      },
+
+      closeTasksModal() {
+        this.isTasksModalActive = false;
+        this.isModalActive = false;
+      },
+
+      openAchievementsPanel() {
+        this.isAchievementsModalActive = true;
+        this.isModalActive = true;
+      },
+
+      closeAchievementsModal() {
+        this.isAchievementsModalActive = false;
+        this.isModalActive = false;
+      },
+
+      saveGameBeforeUnload() {
+        this.$store.dispatch("persistence/saveGame");
       },
     },
   };
@@ -809,5 +885,103 @@
 
   .game-button.special:hover {
     background-color: #4299e1;
+  }
+
+  /* 新增的面板樣式 */
+  .game-panels {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 15px;
+  }
+
+  .panel-buttons {
+    display: flex;
+    gap: 10px;
+  }
+
+  .panel-button {
+    display: flex;
+    align-items: center;
+    gap: 10px; /* 增加間距 */
+    padding: 8px 15px 8px 35px; /* 左側增加更多間距給圖示 */
+    border: none;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative; /* 保持相對定位 */
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  }
+
+  .panel-button:hover {
+    background-color: #0077cc;
+    transform: translateY(-2px);
+    box-shadow: 0 5px 10px rgba(0, 0, 0, 0.15);
+  }
+
+  .panel-button:active {
+    transform: translateY(1px);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  }
+
+  .panel-button .badge {
+    position: absolute;
+    top: -5px; /* 改為 -5px */
+    right: -5px; /* 改為 -5px */
+    background-color: #e53935;
+    color: white;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: bold;
+  }
+
+  .panel-button .icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 1.2rem;
+  }
+
+  .tasks-button {
+    background-color: #f9a825;
+    color: #fff;
+  }
+
+  .tasks-button:hover {
+    background-color: #f57f17;
+    transform: translateY(-2px);
+  }
+
+  .achievements-button {
+    background-color: #7b1fa2;
+    color: #fff;
+  }
+
+  .achievements-button:hover {
+    background-color: #6a1b9a;
+    transform: translateY(-2px);
+  }
+
+  .panel-button .badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background-color: #e53935;
+    color: white;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: bold;
   }
 </style>

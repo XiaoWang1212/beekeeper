@@ -350,6 +350,7 @@ export default {
         
         // 清除挑戰
         commit('CLEAR_CHALLENGE');
+        dispatch("achievements/checkAchievements", null, { root: true });
       },
       
       // 強制觸發挑戰 (測試用)

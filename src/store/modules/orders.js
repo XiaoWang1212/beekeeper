@@ -234,6 +234,9 @@ export default {
             message: `${order.customer}很滿意！${reward.text}`,
             type: 'success'
           }, { root: true });
+
+          dispatch("tasks/trackFulfillOrder", null, { root: true });
+          dispatch("achievements/checkAchievements", null, { root: true });
         }
       }
     }
