@@ -30,13 +30,13 @@
         </div>
         
         <div class="form-group">
-          <label for="username">帳號</label>
+          <label for="username">電子郵件</label>
           <input 
             type="text" 
             id="username" 
             v-model="username" 
-            placeholder="請輸入帳號" 
-            maxlength="20"
+            placeholder="請輸入電子郵件" 
+            maxlength="50"
             required
           />
         </div>
@@ -66,7 +66,7 @@
         
         <div class="message" v-if="message" :class="messageType">{{ message }}</div>
         
-        <button type="submit" class="submit-button" :disabled="!canSubmit">
+        <button type="submit" class="submit-button" :disabled="!canSubmit || isLoading">
           {{ mode === 'login' ? '登入遊戲' : '創建帳號' }}
         </button>
       </form>
@@ -85,19 +85,25 @@
 </template>
 
 <script>
+// 引入 Firebase 認證相關函數
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
+import { mapActions } from 'vuex';
+
 export default {
   name: 'LoginView',
   data() {
     return {
-      mode: 'login',  // 'login' 或 'register'
+      mode: 'login',
       username: '',
       password: '',
       characterName: '',
       message: '',
       messageType: 'info',
-      accounts: {}  // 存儲帳號信息
+      accounts: {},
+      isLoading: false
     };
   },
+  
   computed: {
     canSubmit() {
       if (this.mode === 'login') {
@@ -109,41 +115,127 @@ export default {
       }
     }
   },
+  
   mounted() {
-    // 載入已存在的帳號
-    this.loadAccounts();
-    
     // 從 URL 獲取可能的錯誤訊息
     if (this.$route.query.error) {
       this.message = decodeURIComponent(this.$route.query.error);
       this.messageType = 'error';
       this.$router.replace({ path: this.$route.path });
     }
+    
+    // 檢查是否已經登入
+    const auth = getAuth();
+    if (auth.currentUser) {
+      // 已經登入，直接導航到遊戲頁面
+      this.$router.push('/game');
+    } else {
+      // 仍然載入本地帳號以支持舊版功能
+      this.loadAccounts();
+    }
   },
+  
   methods: {
-    handleSubmit() {
-      if (!this.canSubmit) return;
+    ...mapActions({
+      setCurrentUser: 'firebase/setCurrentUser',
+      loadGame: 'persistence/loadGame'
+    }),
+    
+    async handleSubmit() {
+      if (!this.canSubmit || this.isLoading) return;
+      
+      this.isLoading = true;
       
       if (this.mode === 'login') {
-        this.loginUser();
+        await this.loginUser();
       } else {
-        this.registerUser();
+        await this.registerUser();
+      }
+      
+      this.isLoading = false;
+    },
+    
+    async loginUser() {
+      // 清除之前的錯誤訊息
+      this.message = '';
+      
+      try {
+        const auth = getAuth();
+        
+        // 使用 Firebase 進行登入
+        const userCredential = await signInWithEmailAndPassword(auth, this.username, this.password);
+        const user = userCredential.user;
+        
+        // 設置當前用戶到 Vuex
+        this.setCurrentUser(user);
+        
+        // 保存用戶信息到本地存儲
+        localStorage.setItem('beekeeper_current_user', user.uid);
+        
+        // 如果有顯示名稱，保存它
+        if (user.displayName) {
+          localStorage.setItem('beekeeper_name', user.displayName);
+        } else {
+          // 使用電子郵件前綴作為顯示名稱
+          const emailName = this.username.split('@')[0];
+          localStorage.setItem('beekeeper_name', emailName);
+        }
+        
+        // 登入成功，顯示訊息
+        this.message = '登入成功，正在載入遊戲...';
+        this.messageType = 'success';
+        
+        // 載入遊戲數據
+        await this.loadGame();
+        
+        // 導航到遊戲頁面
+        setTimeout(() => {
+          this.$router.push('/game');
+        }, 1000);
+      } catch (error) {
+        // 處理登入錯誤
+        console.error("登入錯誤:", error);
+        
+        let errorMessage = '';
+        switch (error.code) {
+          case 'auth/invalid-email':
+            errorMessage = '無效的電子郵件格式';
+            break;
+          case 'auth/user-disabled':
+            errorMessage = '此帳號已被停用';
+            break;
+          case 'auth/user-not-found':
+            errorMessage = '找不到此用戶';
+            break;
+          case 'auth/wrong-password':
+            errorMessage = '密碼不正確';
+            break;
+          default:
+            errorMessage = `登入失敗: ${error.message}`;
+        }
+        
+        this.message = errorMessage;
+        this.messageType = 'error';
+        
+        // 回退到本地登入邏輯作為備選
+        this.localLoginUser();
       }
     },
     
-    loginUser() {
+    // 保留本地登入邏輯作為備選
+    localLoginUser() {
       // 檢查帳號是否存在
       if (!this.accounts[this.username]) {
         this.message = '帳號不存在';
         this.messageType = 'error';
-        return;
+        return false;
       }
       
       // 檢查密碼是否正確
       if (this.accounts[this.username].password !== this.password) {
         this.message = '密碼不正確';
         this.messageType = 'error';
-        return;
+        return false;
       }
       
       // 登入成功，載入該帳號的遊戲數據
@@ -158,40 +250,78 @@ export default {
       setTimeout(() => {
         this.$router.push('/game');
       }, 1000);
+      
+      return true;
     },
     
-    registerUser() {
-      // 檢查帳號是否已存在
-      if (this.accounts[this.username]) {
-        this.message = '此帳號已被使用';
+    async registerUser() {
+      // 清除之前的錯誤訊息
+      this.message = '';
+      
+      try {
+        const auth = getAuth();
+        
+        // 使用 Firebase 創建新用戶
+        const userCredential = await createUserWithEmailAndPassword(auth, this.username, this.password);
+        const user = userCredential.user;
+        
+        // 設置用戶顯示名稱
+        // 注意：需要單獨導入 updateProfile 函數
+        // import { updateProfile } from "firebase/auth";
+        // await updateProfile(user, {
+        //   displayName: this.characterName
+        // });
+        
+        // 設置當前用戶到 Vuex
+        this.setCurrentUser(user);
+        
+        // 保存用戶信息到本地存儲
+        localStorage.setItem('beekeeper_current_user', user.uid);
+        localStorage.setItem('beekeeper_name', this.characterName);
+        localStorage.setItem('beekeeper_new_game', 'true');  // 新帳號需要新遊戲
+        
+        // 同時保存到本地帳號系統以向後兼容
+        this.accounts[this.username] = {
+          password: this.password,
+          characterName: this.characterName,
+          created: Date.now(),
+          firebaseUid: user.uid
+        };
+        this.saveAccounts();
+        
+        // 註冊成功，顯示訊息
+        this.message = '帳號創建成功，正在進入遊戲...';
+        this.messageType = 'success';
+        
+        // 導航到遊戲頁面
+        setTimeout(() => {
+          this.$router.push('/game');
+        }, 1000);
+      } catch (error) {
+        // 處理註冊錯誤
+        console.error("註冊錯誤:", error);
+        
+        let errorMessage = '';
+        switch (error.code) {
+          case 'auth/email-already-in-use':
+            errorMessage = '此電子郵件已被使用';
+            break;
+          case 'auth/invalid-email':
+            errorMessage = '無效的電子郵件格式';
+            break;
+          case 'auth/weak-password':
+            errorMessage = '密碼強度不足';
+            break;
+          default:
+            errorMessage = `註冊失敗: ${error.message}`;
+        }
+        
+        this.message = errorMessage;
         this.messageType = 'error';
-        return;
       }
-      
-      // 創建新帳號
-      this.accounts[this.username] = {
-        password: this.password,
-        characterName: this.characterName,
-        created: Date.now()
-      };
-      
-      // 保存帳號信息
-      this.saveAccounts();
-      
-      // 設定當前使用者
-      localStorage.setItem('beekeeper_current_user', this.username);
-      localStorage.setItem('beekeeper_name', this.characterName);
-      localStorage.setItem('beekeeper_new_game', 'true');  // 新帳號需要新遊戲
-      
-      this.message = '帳號創建成功，正在進入遊戲...';
-      this.messageType = 'success';
-      
-      // 導航到遊戲頁面
-      setTimeout(() => {
-        this.$router.push('/game');
-      }, 1000);
     },
     
+    // 保留原有的本地帳號管理方法
     loadAccounts() {
       // 從 localStorage 載入帳號信息
       const accountsData = localStorage.getItem('beekeeper_accounts');

@@ -11,6 +11,8 @@ import laborTasksModule from "./modules/laborTasks";
 import tasks from "./modules/tasks";
 import achievements from "./modules/achievements";
 
+import firebase from "./modules/firebase";
+
 // 導入存檔系統
 import persistenceModule from "./helpers/persistence";
 import { saveGamePlugin } from "./helpers/persistence";
@@ -147,6 +149,7 @@ export default createStore({
     persistence: persistenceModule,
     tasks: tasks,
     achievements: achievements,
+    firebase: firebase,
   },
 
   // 插件

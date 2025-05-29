@@ -1,3 +1,6 @@
+// 修改導入，使用 Realtime Database 的 API
+import { ref, set, get, child } from "firebase/database";
+
 // 存檔插件
 export const saveGamePlugin = (store) => {
   // 定期自動保存
@@ -10,15 +13,19 @@ export default {
   namespaced: true,
 
   actions: {
-    // 保存遊戲
-    saveGame({ rootState }) {
+    // 保存遊戲 - 修改為使用 Realtime Database
+    async saveGame({ rootState }) {
       try {
         // 獲取當前登入的用戶
-        const currentUser = localStorage.getItem("beekeeper_current_user");
-        if (!currentUser) {
+        const currentUser = rootState.firebase.currentUser;
+        const localUser = localStorage.getItem("beekeeper_current_user");
+
+        if (!currentUser && !localUser) {
           console.error("沒有登入用戶，無法保存遊戲");
           return;
         }
+
+        const userId = currentUser ? currentUser.uid : localUser;
 
         const gameData = {
           money: rootState.money,
@@ -85,50 +92,111 @@ export default {
 
         // 使用用戶名作為存檔的key，每個用戶有自己的存檔
         localStorage.setItem(
-          `beekeeperGame_${currentUser}`,
+          `beekeeperGame_${userId}`,
           JSON.stringify(gameData)
         );
-        console.log(`遊戲已保存到帳號: ${currentUser}`);
+
+        // Firebase Realtime Database 保存
+        if (rootState.firebase.database && currentUser) {
+          try {
+            // 獲取 Realtime Database 實例
+            const database = rootState.firebase.database;
+            
+            // 保存到 Realtime Database
+            const gameRef = ref(database, `gameData/${userId}`);
+            await set(gameRef, {
+              ...gameData,
+              lastSaved: new Date().toISOString()
+            });
+          } catch (firebaseError) {
+            console.error("Firebase 保存失敗:", firebaseError);
+          }
+        }
       } catch (e) {
         console.error("保存遊戲時出錯:", e);
       }
     },
 
-    // 載入遊戲
-    loadGame({ commit, dispatch }) {
-      // 獲取當前登入的用戶
-      const currentUser = localStorage.getItem("beekeeper_current_user");
-      if (!currentUser) {
-        console.error("沒有登入用戶，無法載入遊戲");
-        return;
-      }
-
-      // 檢查是否是新遊戲
-      const isNewGame = localStorage.getItem("beekeeper_new_game") === "true";
-      if (isNewGame) {
-        // 新遊戲，初始化默認數據
-        commit("bees/SET_BEES", 3, { root: true });
-        // 移除新遊戲標記
-        localStorage.removeItem("beekeeper_new_game");
-        return;
-      }
-
-      // 載入該用戶的存檔
-      const savedGame = localStorage.getItem(`beekeeperGame_${currentUser}`);
-      if (!savedGame) {
-        // 該用戶沒有存檔，初始化默認數據
-        commit("bees/SET_BEES", 3, { root: true });
-        return;
-      }
-
+    // 載入遊戲 - 修改為使用 Realtime Database
+    async loadGame({ commit, rootState, dispatch }) {
       try {
-        const gameData = JSON.parse(savedGame);
-
-        // 載入金錢
-        if (gameData.money !== undefined) {
-          commit("SET_MONEY", gameData.money, { root: true });
+        // 獲取當前登入的用戶
+        const currentUser = rootState.firebase.currentUser;
+        const localUser = localStorage.getItem("beekeeper_current_user");
+        
+        if (!currentUser && !localUser) {
+          console.error("沒有登入用戶，無法載入遊戲");
+          return false;
+        }
+        
+        const userId = currentUser ? currentUser.uid : localUser;
+        let gameData = null;
+        
+        // 嘗試從 Firebase Realtime Database 載入
+        if (rootState.firebase.database && currentUser) {
+          try {
+            // 獲取 Realtime Database 實例
+            const database = rootState.firebase.database;
+            
+            // 從 Realtime Database 讀取
+            const dbRef = ref(database);
+            const snapshot = await get(child(dbRef, `gameData/${userId}`));
+            
+            if (snapshot.exists()) {
+              gameData = snapshot.val();
+            } else {
+              console.log(`Firebase 中沒有找到用戶 ${userId} 的遊戲數據`);
+            }
+          } catch (firebaseError) {
+            console.error("Firebase 載入失敗:", firebaseError);
+            console.error("詳細錯誤:", firebaseError.message);
+          }
+        }
+        
+        // 如果 Firebase 載入失敗，嘗試從 localStorage 載入
+        if (!gameData) {
+          const savedGame = localStorage.getItem(`beekeeperGame_${userId}`);
+          
+          if (savedGame) {
+            try {
+              gameData = JSON.parse(savedGame);
+            } catch (parseError) {
+              console.error("解析本地存儲數據失敗:", parseError);
+            }
+          }
+        }
+        
+        if (!gameData) {
+          console.log(`沒有找到保存的遊戲數據，初始化新遊戲`);
+          
+          // 初始化新遊戲
+          commit("bees/ADD_BEES", 3, { root: true });
+          commit("bees/SET_HIVE_LEVEL", 1, { root: true });
+          commit("bees/SET_HIVE_HEALTH", 100, { root: true });
+          commit("honey/SET_HONEY_CAPACITY", 100, { root: true });
+          commit("SET_MONEY", 100, { root: true });
+          
+          // 如果有 Firebase 實例，也保存這個初始狀態
+          if (rootState.firebase.database && currentUser) {
+            dispatch("saveGame");
+          }
+          
+          return true;
+        }
+        
+        // 數據驗證
+        if (!validateGameData(gameData)) {
+          console.error("遊戲數據無效，初始化新遊戲");
+          commit("bees/ADD_BEES", 3, { root: true });
+          return false;
         }
 
+        // 載入遊戲數據到 store
+        // 金錢
+        if (typeof gameData.money === 'number') {
+          commit("SET_MONEY", gameData.money, { root: true });
+        }
+        
         // 載入蜜蜂模組數據
         if (gameData.bees) {
           const bees = gameData.bees;
@@ -270,25 +338,55 @@ export default {
         if (gameData.weather) {
           commit("weather/SET_WEATHER", gameData.weather, { root: true });
         }
-
-        console.log(`已載入帳號 ${currentUser} 的遊戲數據`);
+        return true;
       } catch (e) {
         console.error("加載遊戲數據時出錯:", e);
+        console.error("詳細錯誤:", e.stack);
         // 初始化默認數據
         commit("bees/ADD_BEES", 3, { root: true });
+        return false;
+      } finally {
+        // 檢查成就
+        dispatch("achievements/checkAchievements", null, { root: true });
       }
-      dispatch("achievements/checkAchievements", null, { root: true });
     },
 
-    // 刪除存檔 (可選)
-    deleteGameSave(_, username) {
+    // 刪除存檔 (可選) - 同時刪除本地和 Firebase 中的數據
+    async deleteGameSave({ rootState }, username) {
       if (!username) {
         console.error("沒有指定用戶名，無法刪除存檔");
         return;
       }
 
+      // 刪除本地存檔
       localStorage.removeItem(`beekeeperGame_${username}`);
-      console.log(`已刪除用戶 ${username} 的遊戲存檔`);
+      console.log(`已刪除本地用戶 ${username} 的遊戲存檔`);
+
+      // 刪除 Firebase 存檔
+      const currentUser = rootState.firebase.currentUser;
+      if (rootState.firebase.database && currentUser && currentUser.uid === username) {
+        try {
+          const database = rootState.firebase.database;
+          const gameRef = ref(database, `gameData/${username}`);
+          await set(gameRef, null); // 設置為 null 來刪除數據
+          console.log(`已刪除 Firebase 中用戶 ${username} 的遊戲存檔`);
+        } catch (error) {
+          console.error("刪除 Firebase 存檔失敗:", error);
+        }
+      }
     },
   },
 };
+
+// 保持驗證函數不變
+function validateGameData(data) {
+  if (!data) return false;
+  
+  // 檢查必要字段
+  return (
+    typeof data.money === 'number' &&
+    data.bees && 
+    typeof data.bees.bees === 'number' &&
+    data.honey
+  );
+}
